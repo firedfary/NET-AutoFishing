@@ -31,6 +31,7 @@ HSV_YELLOW_UPPER = np.array([45, 205, 255])  # 黄线的上限
 # ==========================================
 # 辅助函数
 # ==========================================
+tolerance = 50
 
 def get_abs_roi(rel_roi):
     """将相对比例坐标转换为绝对像素坐标 (top, left, width, height)"""
@@ -132,7 +133,7 @@ class FishingBot:
         roi = get_abs_roi(ROI_FISH_HOOKED)
         timeout_start = time.time()
         
-        while time.time() - timeout_start < 60: # 最大等待 60 秒
+        while time.time() - timeout_start < 20: # 最大等待 20 秒
             sct_img = self.sct.grab(roi)
             if self.match_template_in_roi(sct_img, self.tpl_hooked, threshold=0.75):
                 print("鱼上钩了！开始收线...")
@@ -154,7 +155,7 @@ class FishingBot:
             roi_dict['top'] + roi_dict['height']
         )
         
-        self.camera.start(region=region, target_fps=60)
+        self.camera.start(region=region, target_fps=20)
         print("进入溜鱼状态，启动高频检测...")
         
         check_settlement_counter = 0
@@ -170,29 +171,34 @@ class FishingBot:
                 yellow_x = self.find_hsv_center_x(frame, HSV_YELLOW_LOWER, HSV_YELLOW_UPPER)
                 
                 if green_x is not None and yellow_x is not None:
-                    # 容差范围，避免频繁抖动
-                    tolerance = 5 
-                    if yellow_x < green_x - tolerance:
-                        # 黄线偏左，按D向右拉
-                        pydirectinput.keyDown('d')
-                        pydirectinput.keyUp('a') # 确保释放反方向
-                    elif yellow_x > green_x + tolerance:
-                        # 黄线偏右，按A向左拉
-                        pydirectinput.keyDown('a')
-                        pydirectinput.keyUp('d')
+                    error = yellow_x - green_x
+                    abs_error = abs(error)
+                    
+                    if abs_error > tolerance:
+                        # 根据偏差大小决定按键持续时间
+                        press_duration = min(abs_error / 100.0, 0.2)  # 最大200ms
+                        
+                        if error < 0:  # 黄线偏左
+                            pydirectinput.keyDown('d')
+                            time.sleep(press_duration)
+                            pydirectinput.keyUp('d')
+                        else:  # 黄线偏右
+                            pydirectinput.keyDown('a')
+                            time.sleep(press_duration)
+                            pydirectinput.keyUp('a')
                     else:
-                        # 保持在中心，释放按键
                         pydirectinput.keyUp('a')
-                        pydirectinput.keyUp('d')
+                        pydirectinput.keyUp('d')                    
+                    random_sleep(0.02, 0.05)
                 
                 # 定期检查是否进入结算界面 (降频检查，每循环20次检查1次)
                 check_settlement_counter += 1
-                if check_settlement_counter > 20:
-                    check_settlement_counter = 0
+                if check_settlement_counter % 20 == 0:
+                    # check_settlement_counter = 0
                     settle_roi = get_abs_roi(ROI_SETTLEMENT)
                     sct_img = self.sct.grab(settle_roi)
                     if self.match_template_in_roi(sct_img, self.tpl_settlement):
-                        print("检测到结算界面，溜鱼成功！")
+                        print("检测到结算界面，溜鱼成功！循环次数: ", check_settlement_counter)
                         pydirectinput.keyUp('a')
                         pydirectinput.keyUp('d')
                         self.camera.stop()
